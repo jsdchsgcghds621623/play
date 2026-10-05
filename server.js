@@ -9,8 +9,7 @@ const playerFile = join(sourceDir, 'index.html');
 const tmdbApiKey = readTmdbApiKey();
 const port = Number(process.env.PORT || 4000);
 const proxyPath = '/proxy/stream';
-const proxyAnyPath = '/api/proxy/any';
-const legacyProxyAnyPath = '/proxy/any';
+const proxyAnyPath = '/proxy/any';
 const tmdbApiPath = '/api/tmdb';
 const tmdbApiOrigin = 'https://api.themoviedb.org/3';
 
@@ -317,7 +316,7 @@ const server = createServer((req, res) => {
     return;
   }
 
-  if ((requestUrl.pathname === proxyAnyPath || requestUrl.pathname === legacyProxyAnyPath) && req.method === 'OPTIONS') {
+  if (requestUrl.pathname === proxyAnyPath && req.method === 'OPTIONS') {
     sendProxyCors(res);
     res.writeHead(204, { 'Cache-Control': 'no-store' });
     res.end();
@@ -329,8 +328,7 @@ const server = createServer((req, res) => {
     return;
   }
 
-  if ((req.method === 'GET' || req.method === 'HEAD') &&
-      (requestUrl.pathname === proxyAnyPath || requestUrl.pathname === legacyProxyAnyPath)) {
+  if ((req.method === 'GET' || req.method === 'HEAD') && requestUrl.pathname === proxyAnyPath) {
     proxyAny(req, res, requestUrl);
     return;
   }
