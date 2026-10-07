@@ -152,7 +152,7 @@ async function proxyStream(req, res, requestUrl) {
     const upstream = await fetch(target, {
       headers: {
         Origin: 'https://embed.filmu.in',
-        Referer: 'https://embed.filmu.in/'
+        Referer: 'https://embed.filmu.in/'   //hello
       },
       cache: 'no-store'
     });
