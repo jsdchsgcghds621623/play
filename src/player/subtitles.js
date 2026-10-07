@@ -354,7 +354,7 @@ async function loadThumbnailPlaylist(streamUrl, referer) {
     const playlistUrl = new URL('tiles.m3u8', sourceUrl);
     sourceUrl.searchParams.forEach((value, key) => playlistUrl.searchParams.set(key, value));
 
-    const playbackUrl = new URL(getStreamPlaybackUrl(playlistUrl.href, referer), window.location.href).href;
+    const playbackUrl = playlistUrl.href;
     const response = await fetch(playbackUrl, { cache: 'no-store' });
     if (!response.ok) return false;
 

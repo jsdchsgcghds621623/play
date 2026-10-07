@@ -41,7 +41,17 @@ function getStreamPlaybackUrl(streamUrl, referer = 'https://embed.filmu.in/') {
     }
 }
 
-function initHlsPlayer(url, referer = 'https://embed.filmu.in/') {
+function isExternalStreamUrl(streamUrl) {
+    try {
+        const parsed = new URL(streamUrl, window.location.href);
+        return parsed.origin !== window.location.origin &&
+            parsed.pathname !== '/proxy/stream' && parsed.pathname !== '/proxy/any';
+    } catch {
+        return false;
+    }
+}
+
+function initHlsPlayer(url, referer = 'https://embed.filmu.in/', forceProxy = false) {
     // Flush progress for the current episode before switching.
     // Must happen before resolvedUrl / videoStorageKey are overwritten.
     saveVideoProgress();
@@ -146,7 +156,8 @@ function initHlsPlayer(url, referer = 'https://embed.filmu.in/') {
         return;
     }
 
-    const playbackUrl = getStreamPlaybackUrl(url, referer);
+    const directFirst = !forceProxy && isExternalStreamUrl(url);
+    const playbackUrl = directFirst ? url : getStreamPlaybackUrl(url, referer);
 
     /* ---- HLS stream (.m3u8) ---- */
     if (Hls.isSupported()) {
@@ -175,6 +186,12 @@ function initHlsPlayer(url, referer = 'https://embed.filmu.in/') {
             console.log(data);
 
             if (!data.fatal) return;
+
+            if (directFirst && data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+                console.warn('Direct HLS request failed; retrying through the stream proxy.');
+                initHlsPlayer(url, referer, true);
+                return;
+            }
 
             switch (data.type) {
                 case Hls.ErrorTypes.NETWORK_ERROR:
@@ -267,6 +284,11 @@ function initHlsPlayer(url, referer = 'https://embed.filmu.in/') {
         }, {once:true});
         video.addEventListener('error', () => {
             if (video.currentTime > 0 && !video.paused) return;
+            if (directFirst) {
+                console.warn('Direct HLS playback failed; retrying through the stream proxy.');
+                initHlsPlayer(url, referer, true);
+                return;
+            }
             displayError('Failed to load stream: ' + (video.error ? video.error.message : 'unknown error'));
             hideLoader();
         }, {once:true});
@@ -281,6 +303,28 @@ const STREAM_API_URL = 'https://filmu.onrender.com/api/stream';
 const BACKUP_STREAM_API_URL = 'https://vidzy-wtgr.onrender.com/api/stream';
 const MAIN_STREAM_REFERER = 'https://embed.filmu.in/';
 const BACKUP_STREAM_REFERER = 'https://player.vidzee.wtf/';
+
+async function getUnavailableStreamMessage(type, id, season, episode) {
+    let name = type === 'tv' ? 'This series' : 'This movie';
+
+    try {
+        const endpoint = type === 'tv'
+            ? `${TMDB_PROXY}/tv/${id}`
+            : `${TMDB_PROXY}/movie/${id}`;
+        const response = await fetch(endpoint);
+        if (response.ok) {
+            const data = await response.json();
+            name = data.name || data.title || name;
+        }
+    } catch (error) {
+        console.warn('Could not load title for unavailable stream:', error.message);
+    }
+
+    if (type === 'tv') {
+        return `${name} - Season ${season}, Episode ${episode} is not available. Try another server.`;
+    }
+    return `${name} is not available. Try another server.`;
+}
 
 async function fetchStreamApi(type, id, season, episode) {
     const params = new URLSearchParams({ tmdb: String(id) });
@@ -344,7 +388,8 @@ async function playMovie(movieId) {
         fetchAndSetTitle('movie', movieId);
         loadIntrodbTimestamps('movie', movieId);
     } catch (err) {
-        displayError(`Failed to fetch movie stream: ${err.message}`);
+        console.error('Failed to fetch movie stream:', err.message);
+        displayError(await getUnavailableStreamMessage('movie', movieId));
         hideLoader();
     }
 }
@@ -379,7 +424,8 @@ async function playEpisode(seriesId, seasonNumber, episodeNumber) {
         fetchAndSetTitle('tv', seriesId, seasonNumber, episodeNumber);
         loadIntrodbTimestamps('tv', seriesId, seasonNumber, episodeNumber);
     } catch (err) {
-        displayError(`Failed to fetch episode stream: ${err.message}`);
+        console.error('Failed to fetch episode stream:', err.message);
+        displayError(await getUnavailableStreamMessage('tv', seriesId, seasonNumber, episodeNumber));
         hideLoader();
     }
 }

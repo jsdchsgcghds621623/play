@@ -6,7 +6,7 @@ function displayError(msg) {
     console.error('[Player error]', detail, { url: resolvedUrl, path: window.location.pathname });
     const title = document.getElementById('error-title');
     const detailEl = document.getElementById('error-detail');
-    if (title) title.textContent = /404|not found|unreachable/i.test(detail)
+    if (title) title.textContent = /404|not found|not available|unreachable/i.test(detail)
         ? 'Stream unavailable'
         : 'Playback problem';
     if (detailEl) detailEl.textContent = detail;
