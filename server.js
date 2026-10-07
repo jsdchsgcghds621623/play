@@ -116,14 +116,27 @@ function resolvePlaylistUrl(uri, sourceUrl) {
   return new URL(uri, sourceUrl).href;
 }
 
+function directTileUrl(uri, sourceUrl) {
+  try {
+    const absolute = resolvePlaylistUrl(uri, sourceUrl);
+    return /\/tiles\/[^/]+\.(?:jpe?g|png|webp)$/i.test(new URL(absolute).pathname) ? absolute : null;
+  } catch {
+    return null;
+  }
+}
+
 function rewritePlaylist(text, sourceUrl) {
   return text.split(/\r?\n/).map(line => {
     const withRewrittenUris = line.replace(/URI="([^"]+)"/g, (_, uri) => {
+      const tileUrl = directTileUrl(uri, sourceUrl);
+      if (tileUrl) return `URI="${tileUrl}"`;
       const absolute = resolvePlaylistUrl(uri, sourceUrl);
       return `URI="${proxiedUrl(absolute)}"`;
     });
 
     if (!withRewrittenUris || withRewrittenUris.startsWith('#')) return withRewrittenUris;
+    const tileUrl = directTileUrl(withRewrittenUris, sourceUrl);
+    if (tileUrl) return tileUrl;
     return proxiedUrl(resolvePlaylistUrl(withRewrittenUris, sourceUrl));
   }).join('\n');
 }
@@ -234,10 +247,15 @@ async function proxyAny(req, res, requestUrl) {
     const baseQuery = `referer=${encodeURIComponent(referer)}&origin=${encodeURIComponent(origin)}`;
     const rewritten = (await upstream.text()).split(/\r?\n/).map(line => {
       if (!line.trim() || line.trim().startsWith('#')) {
-        return line.replace(/URI="([^"]+)"/g, (_, uri) =>
-          `URI="${proxyAnyUrl(new URL(uri, target).href, baseQuery)}"`);
+        return line.replace(/URI="([^"]+)"/g, (_, uri) => {
+          const absolute = new URL(uri, target).href;
+          if (directTileUrl(absolute, target)) return `URI="${absolute}"`;
+          return `URI="${proxyAnyUrl(absolute, baseQuery)}"`;
+        });
       }
-      return proxyAnyUrl(new URL(line.trim(), target).href, baseQuery);
+      const absolute = new URL(line.trim(), target).href;
+      if (directTileUrl(absolute, target)) return absolute;
+      return proxyAnyUrl(absolute, baseQuery);
     }).join('\n');
     res.writeHead(200, { ...outputHeaders, 'Content-Type': 'application/vnd.apple.mpegurl' });
     res.end(rewritten);
