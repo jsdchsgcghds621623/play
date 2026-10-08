@@ -4,7 +4,7 @@
 
 /* Cloudflare Worker that replaces the Node server's /proxy/any route.
    Set this to your deployed Worker URL (or a custom domain bound to it). */
-const CLOUDFLARE_PROXY = 'https://rough-shape-d885.airpods098761234.workers.dev';
+const CLOUDFLARE_PROXY = 'https://player.moonflix.info';
 const CLOUDFLARE_PROXY_HOST = (() => {
     try { return new URL(CLOUDFLARE_PROXY).host; } catch { return ''; }
 })();
