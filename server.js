@@ -9,7 +9,6 @@ const playerFile = join(sourceDir, 'index.html');
 const tmdbApiKey = readTmdbApiKey();
 const port = Number(process.env.PORT || 4000);
 const proxyPath = '/proxy/stream';
-const proxyAnyPath = '/proxy/any';
 const tmdbApiPath = '/api/tmdb';
 const tmdbApiOrigin = 'https://api.themoviedb.org/3';
 
@@ -116,27 +115,14 @@ function resolvePlaylistUrl(uri, sourceUrl) {
   return new URL(uri, sourceUrl).href;
 }
 
-function directTileUrl(uri, sourceUrl) {
-  try {
-    const absolute = resolvePlaylistUrl(uri, sourceUrl);
-    return /\/tiles\/[^/]+\.(?:jpe?g|png|webp)$/i.test(new URL(absolute).pathname) ? absolute : null;
-  } catch {
-    return null;
-  }
-}
-
 function rewritePlaylist(text, sourceUrl) {
   return text.split(/\r?\n/).map(line => {
     const withRewrittenUris = line.replace(/URI="([^"]+)"/g, (_, uri) => {
-      const tileUrl = directTileUrl(uri, sourceUrl);
-      if (tileUrl) return `URI="${tileUrl}"`;
       const absolute = resolvePlaylistUrl(uri, sourceUrl);
       return `URI="${proxiedUrl(absolute)}"`;
     });
 
     if (!withRewrittenUris || withRewrittenUris.startsWith('#')) return withRewrittenUris;
-    const tileUrl = directTileUrl(withRewrittenUris, sourceUrl);
-    if (tileUrl) return tileUrl;
     return proxiedUrl(resolvePlaylistUrl(withRewrittenUris, sourceUrl));
   }).join('\n');
 }
@@ -152,7 +138,7 @@ async function proxyStream(req, res, requestUrl) {
     const upstream = await fetch(target, {
       headers: {
         Origin: 'https://embed.filmu.in',
-        Referer: 'https://embed.filmu.in/'   //hello
+        Referer: 'https://embed.filmu.in/'
       },
       cache: 'no-store'
     });
@@ -183,86 +169,6 @@ async function proxyStream(req, res, requestUrl) {
   } catch (error) {
     send(res, 502, `Stream proxy failed: ${error.message}`);
   }
-}
-
-async function proxyAny(req, res, requestUrl) {
-  const target = requestUrl.searchParams.get('url');
-  if (!target || !isAllowedStreamUrl(target)) {
-    send(res, 400, 'Unsupported URL');
-    return;
-  }
-
-  const referer = requestUrl.searchParams.get('referer') || 'https://vidout.pages.dev/';
-  let origin;
-  try {
-    origin = requestUrl.searchParams.get('origin') || new URL(referer).origin;
-  } catch {
-    send(res, 400, 'Unsupported referer');
-    return;
-  }
-
-  const pathname = new URL(target).pathname;
-  const isPlaylist = /\.(m3u8|m3u|txt)$/i.test(pathname);
-  const headers = {
-    'User-Agent': 'Mozilla/5.0',
-    Accept: '*/*',
-    'Accept-Language': 'en-US,en;q=0.9',
-    Referer: referer,
-    Origin: origin,
-    'Accept-Encoding': 'identity'
-  };
-  if (req.headers.range && !isPlaylist) headers.Range = req.headers.range;
-
-  let upstream;
-  try {
-    upstream = await fetch(target, { method: req.method, headers, redirect: 'follow', cache: 'no-store' });
-  } catch (error) {
-    send(res, 502, `Proxy failed: ${error.message}`);
-    return;
-  }
-
-  const contentType = (upstream.headers.get('content-type') || '').toLowerCase();
-  sendProxyCors(res);
-  const outputHeaders = {
-    'Cross-Origin-Resource-Policy': 'cross-origin',
-    'Cache-Control': 'no-store',
-    'Content-Type': contentType || (isPlaylist ? 'application/vnd.apple.mpegurl' : 'application/octet-stream')
-  };
-
-  if (contentType.includes('text/html')) {
-    send(res, 404, 'Upstream returned HTML (hotlink protection?)');
-    return;
-  }
-  if (!upstream.ok) {
-    res.writeHead(upstream.status, outputHeaders);
-    res.end(req.method === 'HEAD' ? '' : await upstream.text());
-    return;
-  }
-  if (req.method === 'HEAD') {
-    res.writeHead(upstream.status, outputHeaders);
-    res.end();
-    return;
-  }
-  if (isPlaylist) {
-    const baseQuery = `referer=${encodeURIComponent(referer)}&origin=${encodeURIComponent(origin)}`;
-    const rewritten = (await upstream.text()).split(/\r?\n/).map(line => {
-      if (!line.trim() || line.trim().startsWith('#')) {
-        return line.replace(/URI="([^"]+)"/g, (_, uri) => {
-          const absolute = new URL(uri, target).href;
-          if (directTileUrl(absolute, target)) return `URI="${absolute}"`;
-          return `URI="${proxyAnyUrl(absolute, baseQuery)}"`;
-        });
-      }
-      const absolute = new URL(line.trim(), target).href;
-      if (directTileUrl(absolute, target)) return absolute;
-      return proxyAnyUrl(absolute, baseQuery);
-    }).join('\n');
-    res.writeHead(200, { ...outputHeaders, 'Content-Type': 'application/vnd.apple.mpegurl' });
-    res.end(rewritten);
-    return;
-  }
-  res.writeHead(upstream.status, outputHeaders);
-  res.end(Buffer.from(await upstream.arrayBuffer()));
 }
 
 async function proxyTmdb(res, requestUrl) {
@@ -315,10 +221,6 @@ async function proxyTmdb(res, requestUrl) {
   }
 }
 
-function proxyAnyUrl(target, baseQuery) {
-  return `${proxyAnyPath}?url=${encodeURIComponent(target)}&${baseQuery}`;
-}
-
 const server = createServer((req, res) => {
   const requestUrl = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
 
@@ -334,20 +236,14 @@ const server = createServer((req, res) => {
     return;
   }
 
-  if (requestUrl.pathname === proxyAnyPath && req.method === 'OPTIONS') {
-    sendProxyCors(res);
-    res.writeHead(204, { 'Cache-Control': 'no-store' });
-    res.end();
-    return;
-  }
-
   if (req.method === 'GET' && requestUrl.pathname === proxyPath) {
     proxyStream(req, res, requestUrl);
     return;
   }
 
-  if ((req.method === 'GET' || req.method === 'HEAD') && requestUrl.pathname === proxyAnyPath) {
-    proxyAny(req, res, requestUrl);
+  // /proxy/any has moved to the Cloudflare Worker.
+  if (requestUrl.pathname === '/proxy/any') {
+    send(res, 410, 'This endpoint has moved to the Cloudflare Worker proxy.');
     return;
   }
 

@@ -1,6 +1,14 @@
 ﻿/* -------------------------------------------------------------------------
    HLS / DIRECT VIDEO INITIALISATION
    ------------------------------------------------------------------------- */
+
+/* Cloudflare Worker that replaces the Node server's /proxy/any route.
+   Set this to your deployed Worker URL (or a custom domain bound to it). */
+const CLOUDFLARE_PROXY = 'https://rough-shape-d885.airpods098761234.workers.dev';
+const CLOUDFLARE_PROXY_HOST = (() => {
+    try { return new URL(CLOUDFLARE_PROXY).host; } catch { return ''; }
+})();
+
 function isDirectVideoUrl(url) {
     if (url && url.startsWith('blob:')) return true;
     try {
@@ -24,34 +32,30 @@ function getMirrorUrl(originalUrl) {
     return null;
 }
 
+function isProxyUrl(parsed) {
+    return parsed.pathname === '/proxy/stream'
+        || parsed.pathname === '/proxy/any'
+        || (CLOUDFLARE_PROXY_HOST && parsed.host === CLOUDFLARE_PROXY_HOST);
+}
+
 function getStreamPlaybackUrl(streamUrl, referer = 'https://embed.filmu.in/') {
     try {
         const parsed = new URL(streamUrl, window.location.href);
         const currentOrigin = window.location.origin;
-        const isProxyUrl = parsed.pathname === '/proxy/stream' || parsed.pathname === '/proxy/any';
         const isExternal = parsed.origin !== currentOrigin;
-                const origin = new URL(referer).origin;
-        return isExternal && !isProxyUrl
-            ? `/proxy/any?url=${encodeURIComponent(parsed.href)}` +
-                            `&referer=${encodeURIComponent(referer)}` +
-                            `&origin=${encodeURIComponent(origin)}`
+        const origin = new URL(referer).origin;
+
+        return isExternal && !isProxyUrl(parsed)
+            ? `${CLOUDFLARE_PROXY}/proxy/any?url=${encodeURIComponent(parsed.href)}` +
+              `&referer=${encodeURIComponent(referer)}` +
+              `&origin=${encodeURIComponent(origin)}`
             : streamUrl;
     } catch {
         return streamUrl;
     }
 }
 
-function isExternalStreamUrl(streamUrl) {
-    try {
-        const parsed = new URL(streamUrl, window.location.href);
-        return parsed.origin !== window.location.origin &&
-            parsed.pathname !== '/proxy/stream' && parsed.pathname !== '/proxy/any';
-    } catch {
-        return false;
-    }
-}
-
-function initHlsPlayer(url, referer = 'https://embed.filmu.in/', forceProxy = false) {
+function initHlsPlayer(url, referer = 'https://embed.filmu.in/') {
     // Flush progress for the current episode before switching.
     // Must happen before resolvedUrl / videoStorageKey are overwritten.
     saveVideoProgress();
@@ -156,8 +160,7 @@ function initHlsPlayer(url, referer = 'https://embed.filmu.in/', forceProxy = fa
         return;
     }
 
-    const directFirst = !forceProxy && isExternalStreamUrl(url);
-    const playbackUrl = directFirst ? url : getStreamPlaybackUrl(url, referer);
+    const playbackUrl = getStreamPlaybackUrl(url, referer);
 
     /* ---- HLS stream (.m3u8) ---- */
     if (Hls.isSupported()) {
@@ -186,12 +189,6 @@ function initHlsPlayer(url, referer = 'https://embed.filmu.in/', forceProxy = fa
             console.log(data);
 
             if (!data.fatal) return;
-
-            if (directFirst && data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-                console.warn('Direct HLS request failed; retrying through the stream proxy.');
-                initHlsPlayer(url, referer, true);
-                return;
-            }
 
             switch (data.type) {
                 case Hls.ErrorTypes.NETWORK_ERROR:
@@ -284,11 +281,6 @@ function initHlsPlayer(url, referer = 'https://embed.filmu.in/', forceProxy = fa
         }, {once:true});
         video.addEventListener('error', () => {
             if (video.currentTime > 0 && !video.paused) return;
-            if (directFirst) {
-                console.warn('Direct HLS playback failed; retrying through the stream proxy.');
-                initHlsPlayer(url, referer, true);
-                return;
-            }
             displayError('Failed to load stream: ' + (video.error ? video.error.message : 'unknown error'));
             hideLoader();
         }, {once:true});
@@ -608,4 +600,3 @@ async function fetchAndSetTitle(type, id, season, episode) {
         console.warn('fetchAndSetTitle failed:', e.message);
     }
 }
-
