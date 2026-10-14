@@ -78,11 +78,67 @@ window._embedServerMenu = serverPickerMenu;
 
 const serverFrameOverlay = document.createElement('div');
 serverFrameOverlay.className = 'server-frame-overlay hidden';
-serverFrameOverlay.innerHTML = '<div class="server-frame-header"><button type="button" class="server-frame-choose">Choose servers</button></div><iframe class="server-frame" allow="autoplay; fullscreen; picture-in-picture; encrypted-media" allowfullscreen title="Embedded video player"></iframe>';
+serverFrameOverlay.innerHTML = '<div class="server-frame-header"><button type="button" class="server-frame-choose">Choose servers</button></div><div class="server-frame-loading hidden" role="status" aria-live="polite"><img class="server-frame-spinner" src="https://assets.nflxext.com/en_us/pages/wiplayer/site-spinner.png" alt=""><span class="server-frame-loading-message">Loading server...</span></div><iframe class="server-frame" allow="autoplay; fullscreen; picture-in-picture; encrypted-media" allowfullscreen title="Embedded video player"></iframe>';
 videoContainer.appendChild(serverFrameOverlay);
-const serverFrame = serverFrameOverlay.querySelector('.server-frame');
+let serverFrame = serverFrameOverlay.querySelector('.server-frame');
+const serverFrameLoading = serverFrameOverlay.querySelector('.server-frame-loading');
+const serverFrameSpinner = serverFrameOverlay.querySelector('.server-frame-spinner');
+const serverFrameLoadingMessage = serverFrameOverlay.querySelector('.server-frame-loading-message');
 const frameChooseServersButton = serverFrameOverlay.querySelector('.server-frame-choose');
 let selectedServerName = 'Moonflix Player';
+let serverFrameLoadTimer = null;
+
+function watchServerFrame(frame) {
+    frame.addEventListener('load', () => {
+        if (frame !== serverFrame) return;
+        clearTimeout(serverFrameLoadTimer);
+        serverFrameLoadTimer = null;
+        serverFrameLoading.classList.add('hidden');
+    });
+}
+
+watchServerFrame(serverFrame);
+
+function stopServerFrame() {
+    clearTimeout(serverFrameLoadTimer);
+    serverFrameLoadTimer = null;
+    serverFrame.src = 'about:blank';
+    serverFrameLoading.classList.add('hidden');
+    serverFrameSpinner.classList.remove('hidden');
+    serverFrameLoadingMessage.textContent = 'Loading server...';
+}
+
+function loadServerFrame(option) {
+    clearTimeout(serverFrameLoadTimer);
+    serverFrameLoading.classList.remove('hidden');
+    serverFrameSpinner.classList.remove('hidden');
+    serverFrameLoadingMessage.textContent = `Loading ${option.name}...`;
+
+    const previousFrame = serverFrame;
+    const nextFrame = document.createElement('iframe');
+    nextFrame.className = 'server-frame';
+    nextFrame.setAttribute(
+        'allow',
+        option.name === 'Filem'
+            ? 'autoplay; encrypted-media; picture-in-picture'
+            : 'autoplay; fullscreen; picture-in-picture; encrypted-media'
+    );
+    nextFrame.allowFullscreen = true;
+    nextFrame.title = `${option.name} embedded player`;
+    serverFrame = nextFrame;
+    watchServerFrame(nextFrame);
+
+    previousFrame.src = 'about:blank';
+    previousFrame.replaceWith(nextFrame);
+    nextFrame.src = option.url;
+
+    serverFrameLoadTimer = setTimeout(() => {
+        if (serverFrame !== nextFrame) return;
+        serverFrameLoadTimer = null;
+        serverFrameSpinner.classList.add('hidden');
+        serverFrameLoadingMessage.textContent = `${option.name} is taking too long to respond. Choose another server.`;
+    }, 20000);
+}
 
 function closeServerPickerMenu() {
     serverPickerMenu.classList.add('hidden');
@@ -110,7 +166,7 @@ function openServerPickerMenu(overEmbed = false) {
 
 function closeServerFrame() {
     serverFrameOverlay.classList.add('hidden');
-    serverFrame.src = 'about:blank';
+    stopServerFrame();
     selectedServerName = 'Moonflix Player';
     renderServerOptions();
     resetInactivityTimer();
@@ -130,9 +186,8 @@ function openServerFrame(serverName) {
 
     video.pause();
     selectedServerName = option.name;
-    serverFrame.title = `${option.name} embedded player`;
-    serverFrame.src = option.url;
     serverFrameOverlay.classList.remove('hidden');
+    loadServerFrame(option);
     closeServerPickerMenu();
     serverOptionList.querySelectorAll('button').forEach(button => {
         const selected = button.dataset.server === option.name;
