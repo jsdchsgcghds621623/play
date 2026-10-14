@@ -87,13 +87,24 @@ const serverFrameLoadingMessage = serverFrameOverlay.querySelector('.server-fram
 const frameChooseServersButton = serverFrameOverlay.querySelector('.server-frame-choose');
 let selectedServerName = 'Moonflix Player';
 let serverFrameLoadTimer = null;
+let serverFrameLoadStartedAt = 0;
+const SERVER_SPINNER_MIN_VISIBLE_MS = 900;
 
 function watchServerFrame(frame) {
     frame.addEventListener('load', () => {
         if (frame !== serverFrame) return;
         clearTimeout(serverFrameLoadTimer);
-        serverFrameLoadTimer = null;
-        serverFrameLoading.classList.add('hidden');
+        const remainingVisibleMs = SERVER_SPINNER_MIN_VISIBLE_MS - (performance.now() - serverFrameLoadStartedAt);
+        if (remainingVisibleMs > 0) {
+            serverFrameLoadTimer = setTimeout(() => {
+                if (frame !== serverFrame) return;
+                serverFrameLoadTimer = null;
+                serverFrameLoading.classList.add('hidden');
+            }, remainingVisibleMs);
+        } else {
+            serverFrameLoadTimer = null;
+            serverFrameLoading.classList.add('hidden');
+        }
     });
 }
 
@@ -102,6 +113,7 @@ watchServerFrame(serverFrame);
 function stopServerFrame() {
     clearTimeout(serverFrameLoadTimer);
     serverFrameLoadTimer = null;
+    serverFrameLoadStartedAt = 0;
     serverFrame.src = 'about:blank';
     serverFrameLoading.classList.add('hidden');
     serverFrameSpinner.classList.remove('hidden');
@@ -110,6 +122,7 @@ function stopServerFrame() {
 
 function loadServerFrame(option) {
     clearTimeout(serverFrameLoadTimer);
+    serverFrameLoadStartedAt = performance.now();
     serverFrameLoading.classList.remove('hidden');
     serverFrameSpinner.classList.remove('hidden');
     serverFrameLoadingMessage.textContent = `Loading ${option.name}...`;
