@@ -21,7 +21,7 @@ document.getElementById('error-dismiss')?.addEventListener('click', () => {
 
 document.getElementById('error-retry')?.addEventListener('click', () => {
     errorMessageDiv.classList.add('hidden');
-    if (resolvedUrl) initHlsPlayer(resolvedUrl);
+    if (resolvedUrl) initHlsPlayer(resolvedUrl, resolvedStreamReferer, resolvedUsesLocalProxy);
     else resolveAndPlay();
 });
 function showLoader() {
@@ -57,6 +57,7 @@ function updateProgress() {
     remainingTimeDisplay.textContent = `${formatTime(video.duration - video.currentTime)}`;
 }
 function showControls() {
+    videoContainer.classList.remove('player-cursor-hidden');
     if (!loadingIndicator.classList.contains('hidden')) {
         bottomOverlay.classList.remove('controls-hidden');
         bottomOverlay.classList.add('controls-visible');
@@ -77,7 +78,9 @@ function showControls() {
     }
 }
 function hideControls() {
-    if (audioSubtitleMenu.classList.contains('hidden') && speedQualityMenu.classList.contains('hidden')) {
+    if (audioSubtitleMenu.classList.contains('hidden') && speedQualityMenu.classList.contains('hidden') &&
+        (!window._embedServerMenu || window._embedServerMenu.classList.contains('hidden'))) {
+        videoContainer.classList.add('player-cursor-hidden');
         bottomOverlay.classList.remove('controls-visible');
         bottomOverlay.classList.add('controls-hidden');
         centerPlayPauseOverlay.classList.remove('opacity-100','pointer-events-auto');
@@ -103,7 +106,8 @@ function resetInactivityTimer() {
     clearTimeout(inactivityTimer);
     showControls();
     if (!isSeeking && audioSubtitleMenu.classList.contains('hidden') &&
-        speedQualityMenu.classList.contains('hidden') && loadingIndicator.classList.contains('hidden')) {
+        speedQualityMenu.classList.contains('hidden') && loadingIndicator.classList.contains('hidden') &&
+        (!window._embedServerMenu || window._embedServerMenu.classList.contains('hidden'))) {
         inactivityTimer = setTimeout(hideControls, INACTIVITY_TIMEOUT);
     }
 }
@@ -133,7 +137,8 @@ function toggleMute() {
     resetInactivityTimer();
 }
 function toggleVideoPlayPause() {
-    if (audioSubtitleMenu.classList.contains('hidden') && speedQualityMenu.classList.contains('hidden') && loadingIndicator.classList.contains('hidden')) {
+    if (audioSubtitleMenu.classList.contains('hidden') && speedQualityMenu.classList.contains('hidden') && loadingIndicator.classList.contains('hidden') &&
+        (!window._embedServerMenu || window._embedServerMenu.classList.contains('hidden'))) {
         if (video.paused || video.ended) {
             video.play().catch(e => displayError('Play failed: ' + e.message));
         } else {

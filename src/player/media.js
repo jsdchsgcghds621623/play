@@ -8,6 +8,16 @@ const CLOUDFLARE_PROXY = 'https://player.moonflix.info';
 const CLOUDFLARE_PROXY_HOST = (() => {
     try { return new URL(CLOUDFLARE_PROXY).host; } catch { return ''; }
 })();
+const CLOUDFLARE_PROXY_FALLBACKS = [
+    'https://snowy-thunder-54b7.satishsaw168.workers.dev',
+    'https://red-frost-220a.satishsaw298.workers.dev',
+    'https://still-wind-sfvs.satishsaw05.workers.dev',
+    'https://quiet-morning-53c4.satusaw05.workers.dev',
+    'https://fragrant-glitter-261b.sawsatu1.workers.dev',
+    'https://divine-meadow-540e.vishalsaw138.workers.dev',
+    'https://delicate-fire-6f78.saw519477.workers.dev',
+];
+let activeCloudflareProxyIndex = 0;
 
 function isDirectVideoUrl(url) {
     if (url && url.startsWith('blob:')) return true;
@@ -38,12 +48,21 @@ function isProxyUrl(parsed) {
         || (CLOUDFLARE_PROXY_HOST && parsed.host === CLOUDFLARE_PROXY_HOST);
 }
 
-function getStreamPlaybackUrl(streamUrl, referer = 'https://embed.filmu.in/') {
+function getStreamPlaybackUrl(streamUrl, referer = 'https://embed.filmu.in/', useLocalProxy = false) {
     try {
         const parsed = new URL(streamUrl, window.location.href);
         const currentOrigin = window.location.origin;
         const isExternal = parsed.origin !== currentOrigin;
         const origin = new URL(referer).origin;
+
+        if (useLocalProxy) {
+            const proxyUrl = new URL('/proxy/stream', currentOrigin);
+            proxyUrl.searchParams.set('url', parsed.href);
+            proxyUrl.searchParams.set('referer', referer);
+            proxyUrl.searchParams.set('origin', origin);
+            proxyUrl.searchParams.set('playlist', 'origin');
+            return proxyUrl.href;
+        }
 
         return isExternal && !isProxyUrl(parsed)
             ? `${CLOUDFLARE_PROXY}/proxy/any?url=${encodeURIComponent(parsed.href)}` +
@@ -55,7 +74,67 @@ function getStreamPlaybackUrl(streamUrl, referer = 'https://embed.filmu.in/') {
     }
 }
 
-function initHlsPlayer(url, referer = 'https://embed.filmu.in/') {
+function createCloudflareProxyFailoverLoader() {
+    const BaseLoader = Hls.DefaultConfig.loader;
+    return class CloudflareProxyFailoverLoader extends BaseLoader {
+        load(context, config, callbacks) {
+            const isCloudflareRequest = (() => {
+                try {
+                    const parsed = new URL(context.url, window.location.href);
+                    return parsed.host === CLOUDFLARE_PROXY_HOST ||
+                        CLOUDFLARE_PROXY_FALLBACKS.some(endpoint => parsed.origin === endpoint);
+                } catch {
+                    return false;
+                }
+            })();
+            let requestIndex = activeCloudflareProxyIndex;
+
+            const attempt = () => {
+                requestIndex = activeCloudflareProxyIndex;
+                const requestContext = { ...context };
+                if (requestIndex > 0 && isCloudflareRequest) {
+                    const endpoint = new URL(CLOUDFLARE_PROXY_FALLBACKS[requestIndex - 1]);
+                    const requestUrl = new URL(context.url, window.location.href);
+                    requestUrl.protocol = endpoint.protocol;
+                    requestUrl.host = endpoint.host;
+                    requestUrl.pathname = '/';
+                    requestContext.url = requestUrl.href;
+                }
+
+                super.load(requestContext, config, {
+                    ...callbacks,
+                    onError: (response, failedContext, networkDetails, stats) => {
+                        const status = Number(response?.code || 0);
+                        const canFailOver = isCloudflareRequest &&
+                            (status === 0 || status === 429 || status === 1015 || status >= 500);
+                        if (canFailOver && requestIndex < CLOUDFLARE_PROXY_FALLBACKS.length) {
+                            if (requestIndex === activeCloudflareProxyIndex) activeCloudflareProxyIndex++;
+                            if (requestIndex < activeCloudflareProxyIndex) {
+                                attempt();
+                                return;
+                            }
+                        }
+                        callbacks.onError(response, failedContext, networkDetails, stats);
+                    },
+                    onTimeout: (stats, failedContext, networkDetails) => {
+                        if (isCloudflareRequest && requestIndex < CLOUDFLARE_PROXY_FALLBACKS.length) {
+                            if (requestIndex === activeCloudflareProxyIndex) activeCloudflareProxyIndex++;
+                            if (requestIndex < activeCloudflareProxyIndex) {
+                                attempt();
+                                return;
+                            }
+                        }
+                        callbacks.onTimeout(stats, failedContext, networkDetails);
+                    },
+                });
+            };
+
+            attempt();
+        }
+    };
+}
+
+function initHlsPlayer(url, referer = 'https://embed.filmu.in/', useLocalProxy = false) {
     // Flush progress for the current episode before switching.
     // Must happen before resolvedUrl / videoStorageKey are overwritten.
     saveVideoProgress();
@@ -82,6 +161,9 @@ function initHlsPlayer(url, referer = 'https://embed.filmu.in/') {
     _audioAutoApplied = false;
 
     resolvedUrl     = url;
+    resolvedStreamReferer = referer;
+    resolvedUsesLocalProxy = useLocalProxy;
+    activeCloudflareProxyIndex = 0;
     videoStorageKey = generateStorageKey(url);
 
     // Start the Cloudflare country lookup immediately so it can run in
@@ -147,6 +229,10 @@ function initHlsPlayer(url, referer = 'https://embed.filmu.in/') {
             }
 
             video.removeEventListener('error', onVideoError);
+            if (window._switchToNextEmbedServer?.('Primary video stream failed')) {
+                hideLoader();
+                return;
+            }
             displayError('Failed to load video: ' + (video.error ? video.error.message : 'unknown error'));
             hideLoader();
         };
@@ -160,7 +246,7 @@ function initHlsPlayer(url, referer = 'https://embed.filmu.in/') {
         return;
     }
 
-    const playbackUrl = getStreamPlaybackUrl(url, referer);
+    const playbackUrl = getStreamPlaybackUrl(url, referer, useLocalProxy);
 
     /* ---- HLS stream (.m3u8) ---- */
     if (Hls.isSupported()) {
@@ -169,8 +255,11 @@ function initHlsPlayer(url, referer = 'https://embed.filmu.in/') {
         const h = new Hls({
             renderTextTracksNatively: true,
             subtitleDisplay: true,
+            loader: createCloudflareProxyFailoverLoader(),
         });
         hlsInstance = h;
+        let networkRecoveryAttempted = false;
+        let mediaRecoveryAttempted = false;
 
         h.on(Hls.Events.MEDIA_ATTACHED, () => h.loadSource(playbackUrl));
         h.on(Hls.Events.MANIFEST_PARSED, async () => {
@@ -201,24 +290,54 @@ function initHlsPlayer(url, referer = 'https://embed.filmu.in/') {
                         data.details === Hls.ErrorDetails.LEVEL_LOAD_TIMEOUT
                     ) {
                         console.error("Stream not found / unreachable:", data);
-                        displayError("Stream not found (404)");
                         h.destroy();
+                        if (window._switchToNextEmbedServer?.('Primary HLS stream was not found')) {
+                            hideLoader();
+                            break;
+                        }
+                        displayError("Stream not found (404)");
                         hideLoader();
                         break;
                     }
-                    console.warn("Network error, retrying...");
-                    h.startLoad();
+                    if (networkRecoveryAttempted) {
+                        h.destroy();
+                        if (window._switchToNextEmbedServer?.('Primary HLS network retries failed')) {
+                            hideLoader();
+                            break;
+                        }
+                        displayError('Fatal HLS network error');
+                        hideLoader();
+                    } else {
+                        networkRecoveryAttempted = true;
+                        console.warn("Network error, retrying...");
+                        h.startLoad();
+                    }
                     break;
 
                 case Hls.ErrorTypes.MEDIA_ERROR:
-                    console.warn("Media error, recovering...");
-                    h.recoverMediaError();
+                    if (mediaRecoveryAttempted) {
+                        h.destroy();
+                        if (window._switchToNextEmbedServer?.('Primary HLS media recovery failed')) {
+                            hideLoader();
+                            break;
+                        }
+                        displayError('Fatal HLS media error');
+                        hideLoader();
+                    } else {
+                        mediaRecoveryAttempted = true;
+                        console.warn("Media error, recovering...");
+                        h.recoverMediaError();
+                    }
                     break;
 
                 default:
                     console.error("Unrecoverable error:", data);
-                    displayError("Fatal HLS error");
                     h.destroy();
+                    if (window._switchToNextEmbedServer?.('Primary HLS playback failed')) {
+                        hideLoader();
+                        break;
+                    }
+                    displayError("Fatal HLS error");
                     hideLoader();
                     break;
             }
@@ -281,11 +400,19 @@ function initHlsPlayer(url, referer = 'https://embed.filmu.in/') {
         }, {once:true});
         video.addEventListener('error', () => {
             if (video.currentTime > 0 && !video.paused) return;
+            if (window._switchToNextEmbedServer?.('Primary HLS stream failed')) {
+                hideLoader();
+                return;
+            }
             displayError('Failed to load stream: ' + (video.error ? video.error.message : 'unknown error'));
             hideLoader();
         }, {once:true});
     }
     else {
+        if (window._switchToNextEmbedServer?.('This browser cannot play the primary HLS stream')) {
+            hideLoader();
+            return;
+        }
         displayError('Browser does not support HLS');
         hideLoader();
     }
@@ -336,7 +463,7 @@ async function fetchStreamApi(type, id, season, episode) {
         const sourceUrl = data?.sources?.find(source => source?.url)?.url
             || (data?.m3u8_path && data?._base ? new URL(data.m3u8_path, `${data._base}/`).href : null);
         if (data?.available !== false && sourceUrl) {
-            return { data, sourceUrl, referer: MAIN_STREAM_REFERER };
+            return { data, sourceUrl, referer: MAIN_STREAM_REFERER, useLocalProxy: false };
         }
         mainError = new Error(data?.error || 'Main stream API returned no playable source');
     } catch (error) {
@@ -358,7 +485,7 @@ async function fetchStreamApi(type, id, season, episode) {
         if (data?.available === false || !sourceUrl) {
             throw new Error(data?.error || 'Backup stream API returned no playable source');
         }
-        return { data, sourceUrl, referer: BACKUP_STREAM_REFERER };
+        return { data, sourceUrl, referer: BACKUP_STREAM_REFERER, useLocalProxy: false };
     } catch (backupError) {
         throw new Error(`Main stream unavailable (${mainError.message}); backup failed (${backupError.message})`);
     }
@@ -372,8 +499,8 @@ async function playMovie(movieId) {
     showLoader();
 
     try {
-        const { sourceUrl, referer } = await fetchStreamApi('movie', movieId);
-        initHlsPlayer(sourceUrl, referer);
+        const { sourceUrl, referer, useLocalProxy } = await fetchStreamApi('movie', movieId);
+        initHlsPlayer(sourceUrl, referer, useLocalProxy);
         loadSubtitlesFromUrlset(sourceUrl, referer);
         loadSubtitlesFromGithub('movie', movieId);
         loadSubtitlesFromWyzie('movie', movieId);
@@ -381,6 +508,10 @@ async function playMovie(movieId) {
         loadIntrodbTimestamps('movie', movieId);
     } catch (err) {
         console.error('Failed to fetch movie stream:', err.message);
+        if (window._switchToNextEmbedServer?.(err.message)) {
+            hideLoader();
+            return;
+        }
         displayError(await getUnavailableStreamMessage('movie', movieId));
         hideLoader();
     }
@@ -408,8 +539,8 @@ async function playEpisode(seriesId, seasonNumber, episodeNumber) {
     showLoader();
 
     try {
-        const { sourceUrl, referer } = await fetchStreamApi('tv', seriesId, seasonNumber, episodeNumber);
-        initHlsPlayer(sourceUrl, referer);
+        const { sourceUrl, referer, useLocalProxy } = await fetchStreamApi('tv', seriesId, seasonNumber, episodeNumber);
+        initHlsPlayer(sourceUrl, referer, useLocalProxy);
         loadSubtitlesFromUrlset(sourceUrl, referer);
         loadSubtitlesFromGithub('tv', seriesId, seasonNumber, episodeNumber);
         loadSubtitlesFromWyzie('tv', seriesId, seasonNumber, episodeNumber);
@@ -417,6 +548,10 @@ async function playEpisode(seriesId, seasonNumber, episodeNumber) {
         loadIntrodbTimestamps('tv', seriesId, seasonNumber, episodeNumber);
     } catch (err) {
         console.error('Failed to fetch episode stream:', err.message);
+        if (window._switchToNextEmbedServer?.(err.message)) {
+            hideLoader();
+            return;
+        }
         displayError(await getUnavailableStreamMessage('tv', seriesId, seasonNumber, episodeNumber));
         hideLoader();
     }

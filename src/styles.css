@@ -75,7 +75,7 @@
             .mobile-btn-label { display: none; }
         }
         @media(max-width:500px){
-            #back-button, #fit-button, #next-episode-button, #mobile-title{display:none !important;}
+            #back-button, #mobile-title{display:none !important;}
             #right-controlbuttons{width:unset; justify-content:space-between;}
             #next-episode-button, #speed-button{position:relative;}
         }
@@ -99,6 +99,39 @@
             #left-controlbuttons, #right-controlbuttons{gap:1.5rem;}
             #bottom-controls-row{padding-top:24px;padding-bottom:24px;}
         }
+        @media(max-width:999px){
+            #bottom-controls-row{
+                flex-wrap:wrap;
+                justify-content:center;
+                row-gap:8px;
+            }
+            #right-controlbuttons{
+                width:100%;
+                max-width:calc(100vw - 32px);
+                flex-wrap:wrap;
+                justify-content:center;
+                gap:6px 8px;
+            }
+            #right-controlbuttons > *{margin:0 !important;}
+            #right-controlbuttons .mobile-labeled-btn{
+                box-sizing:border-box;
+                min-width:40px;
+                min-height:40px;
+                max-width:100%;
+                flex:0 1 auto;
+                padding:4px 6px !important;
+            }
+            #right-controlbuttons .mobile-labeled-btn svg{
+                width:22px !important;
+                height:22px !important;
+                flex:0 0 22px;
+            }
+            #right-controlbuttons .mobile-btn-label{
+                flex:0 0 auto;
+                font-size:11px;
+            }
+            .bottom-control-button:hover{transform:none;}
+        }
         #controls-bar{padding: 0 16px;}
         
         #progress-indicator,#seek-thumb{background:rgb(225,0,0)}
@@ -107,6 +140,8 @@
         #seek-bar:hover{height:6px}
         #seek-thumb{height:1rem;width:1rem;transform:translateY(-50%) scale(1)}
         #video-container{width:100vw;height:100vh;background:#000}
+        #video-container.player-cursor-hidden,
+        #video-container.player-cursor-hidden * { cursor: none !important; }
         .player-error {
             position: absolute;
             top: 20px;
@@ -162,6 +197,139 @@
         }
         .track-selector:hover {
             background: rgba(255, 255, 255, 0.1) !important;
+        }
+
+        .server-picker-wrapper {
+            position: relative;
+            display: flex;
+            align-items: center;
+        }
+        #servers-button { position: relative; }
+        .embed-server-menu {
+            position: absolute;
+            right: 0;
+            bottom: calc(100% + 10px);
+            z-index: 60;
+            width: min(22rem, 85vw);
+            overflow: hidden;
+            color: #f5f5f5;
+            background: linear-gradient(110deg, #303030, #181a1d);
+            box-shadow: 0 12px 36px #0009;
+        }
+        .embed-server-menu:not(.hidden) { display: block; }
+        .embed-server-menu.server-menu-over-embed {
+            right: 12px;
+            bottom: 12px;
+            z-index: 60;
+        }
+        .embed-server-menu-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 16px 6px;
+        }
+        .embed-server-menu-header h4 {
+            margin: 0;
+            color: #aaa;
+            font-size: 14px;
+            font-weight: 700;
+        }
+        .embed-server-menu-close {
+            border: 0;
+            padding: 0 4px;
+            color: #aaa;
+            background: transparent;
+            font-size: 24px;
+            line-height: 1;
+            cursor: pointer;
+        }
+        .embed-server-options { padding: 2px 0 8px; }
+        .embed-server-option {
+            display: flex;
+            width: 100%;
+            min-height: 48px;
+            align-items: center;
+            gap: 18px;
+            border: 0;
+            padding: 8px 16px;
+            color: #ccc;
+            background: transparent;
+            font: inherit;
+            font-size: 18px;
+            text-align: left;
+            cursor: pointer;
+        }
+        .embed-server-option:hover,
+        .embed-server-option[aria-pressed="true"] {
+            color: #fff;
+            background: #ffffff12;
+        }
+        .embed-server-check { width: 14px; flex: 0 0 14px; font-size: 18px; }
+        .embed-server-empty { padding: 8px 16px; color: #aaa; }
+        .server-frame-overlay {
+            position: absolute;
+            inset: 0;
+            z-index: 50;
+            display: flex;
+            flex-direction: column;
+            background: #000;
+        }
+        .server-frame-overlay:not(.hidden) { display: flex; }
+        .server-frame-header {
+            position: absolute;
+            z-index: 1;
+            top: 0;
+            right: 0;
+            left: 0;
+            display: flex;
+            min-height: 48px;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 12px;
+            padding: 8px 12px;
+            color: #fff;
+            background: linear-gradient(#000b, transparent);
+            pointer-events: none;
+        }
+        .server-frame-choose {
+            display: inline-flex;
+            width: max-content;
+            max-width: calc(100% - 24px);
+            flex: 0 0 auto;
+            box-sizing: border-box;
+            white-space: nowrap;
+            border: 1px solid #ffffff70;
+            border-radius: 3px;
+            padding: 7px 10px;
+            color: #fff;
+            background: #111e;
+            font-family: 'Netflix Sans', sans-serif;
+            font-size: 14px;
+            font-weight: 700;
+            cursor: pointer;
+            pointer-events: auto;
+            transition: background 150ms ease, transform 150ms ease;
+        }
+        .server-frame-choose:hover {
+            background: #333e;
+            transform: scale(1.04);
+        }
+        .server-frame { width: 100%; height: 100%; flex: 1; border: 0; background: #000; }
+        @media (max-width: 999px) {
+            #servers-button { position: relative; left: 0; }
+            .embed-server-menu:not(.hidden) {
+                position: fixed;
+                inset: 0;
+                width: 100%;
+                height: 100%;
+                max-height: 100%;
+                z-index: 99999;
+                overflow-y: auto;
+                background: linear-gradient(110deg, #303030, #181a1d);
+            }
+            .embed-server-menu-header { padding: 16px; }
+            .embed-server-menu-header h4 { font-size: 16px; }
+            .embed-server-option { min-height: 54px; padding: 10px 16px; font-size: 20px; }
         }
 
         /* ---- Mobile fullscreen audio/subtitle menu (max-width: 999px only) ---- */

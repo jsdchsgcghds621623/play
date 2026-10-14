@@ -5,6 +5,7 @@ document.body.insertAdjacentHTML('afterbegin', playerTemplate);
 const playerScripts = [
 	'core.js',
 	'controls.js',
+	'servers.js',
 	'fallback.js',
 	'media.js',
 	'subtitles.js',
@@ -14,13 +15,22 @@ const playerScripts = [
 	'ui.js'
 ];
 
-for (const file of playerScripts) {
-	await new Promise((resolve, reject) => {
-		const script = document.createElement('script');
-		script.src = `/player/${file}?v=5`;
-		script.async = false;
-		script.onload = resolve;
-		script.onerror = () => reject(new Error(`Failed to load player component: ${file}`));
-		document.head.appendChild(script);
-	});
+const scriptLoads = playerScripts.map(file => new Promise((resolve, reject) => {
+	const script = document.createElement('script');
+	script.src = `/player/${file}?v=9`;
+	script.async = false;
+	script.onload = resolve;
+	script.onerror = () => reject(new Error(`Failed to load player component: ${file}`));
+	document.head.appendChild(script);
+}));
+
+try {
+	await Promise.all(scriptLoads);
+} catch (error) {
+	console.error('[PlayerStartup] Component loading failed:', error);
+	const errorMessage = document.getElementById('error-message');
+	if (errorMessage) {
+		errorMessage.textContent = 'The player could not start. Please refresh and try again.';
+		errorMessage.classList.remove('hidden');
+	}
 }

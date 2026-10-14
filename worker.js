@@ -32,7 +32,7 @@ export default {
     }
 
     const pathname = targetUrl.pathname.toLowerCase();
-    const isPlaylist = pathname.endsWith('.m3u8') || pathname.endsWith('.m3u');
+    const isPlaylist = pathname.endsWith('.m3u8') || pathname.endsWith('.m3u') || pathname.endsWith('.txt');
     const incomingRange = request.headers.get('range');
 
     // ---- Normalise Cache Key ----
@@ -118,6 +118,21 @@ export default {
         status: 404,
         headers: outHeaders,
       });
+    }
+
+    const allowedOrigin = upstream.headers.get('access-control-allow-origin');
+    if (
+      request.method === 'GET' &&
+      upstream.ok &&
+      !isPlaylist &&
+      !incomingRange &&
+      (allowedOrigin === '*' || allowedOrigin === origin)
+    ) {
+      await upstream.body?.cancel().catch(() => {});
+      const redirectHeaders = corsHeaders();
+      redirectHeaders.Location = target;
+      redirectHeaders['Cache-Control'] = 'no-store';
+      return new Response(null, { status: 302, headers: redirectHeaders });
     }
 
     // ---- Rewrite playlists ----

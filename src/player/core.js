@@ -345,6 +345,8 @@ const SPEED_OPTIONS = [
 const urlParams   = new URLSearchParams(window.location.search);
 
 let resolvedUrl   = null;   /* set once we know the final HLS URL */
+let resolvedStreamReferer = 'https://embed.filmu.in/';
+let resolvedUsesLocalProxy = false;
 let hlsInstance   = null;
 let isHlsJsMode   = false;
 let inactivityTimer;

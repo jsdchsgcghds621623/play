@@ -115,15 +115,16 @@ function resolvePlaylistUrl(uri, sourceUrl) {
   return new URL(uri, sourceUrl).href;
 }
 
-function rewritePlaylist(text, sourceUrl) {
+function rewritePlaylist(text, sourceUrl, proxyReferences = true) {
   return text.split(/\r?\n/).map(line => {
     const withRewrittenUris = line.replace(/URI="([^"]+)"/g, (_, uri) => {
       const absolute = resolvePlaylistUrl(uri, sourceUrl);
-      return `URI="${proxiedUrl(absolute)}"`;
+      return `URI="${proxyReferences ? proxiedUrl(absolute) : absolute}"`;
     });
 
     if (!withRewrittenUris || withRewrittenUris.startsWith('#')) return withRewrittenUris;
-    return proxiedUrl(resolvePlaylistUrl(withRewrittenUris, sourceUrl));
+    const absolute = resolvePlaylistUrl(withRewrittenUris, sourceUrl);
+    return proxyReferences ? proxiedUrl(absolute) : absolute;
   }).join('\n');
 }
 
@@ -135,10 +136,12 @@ async function proxyStream(req, res, requestUrl) {
   }
 
   try {
+    const referer = requestUrl.searchParams.get('referer') || 'https://embed.filmu.in/';
+    const origin = requestUrl.searchParams.get('origin') || new URL(referer).origin;
     const upstream = await fetch(target, {
       headers: {
-        Origin: 'https://embed.filmu.in',
-        Referer: 'https://embed.filmu.in/'
+        Origin: origin,
+        Referer: referer
       },
       cache: 'no-store'
     });
@@ -160,7 +163,11 @@ async function proxyStream(req, res, requestUrl) {
 
     if (isPlaylist) {
       res.writeHead(200, headers);
-      res.end(rewritePlaylist(await upstream.text(), target));
+      res.end(rewritePlaylist(
+        await upstream.text(),
+        target,
+        requestUrl.searchParams.get('playlist') !== 'origin'
+      ));
       return;
     }
 
