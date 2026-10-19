@@ -17,7 +17,7 @@ const playerScripts = [
 
 const scriptLoads = playerScripts.map(file => new Promise((resolve, reject) => {
 	const script = document.createElement('script');
-	script.src = `/player/${file}?v=12`;
+	script.src = `/player/${file}?v=15`;
 	script.async = false;
 	script.onload = resolve;
 	script.onerror = () => reject(new Error(`Failed to load player component: ${file}`));

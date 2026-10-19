@@ -260,8 +260,33 @@ function initHlsPlayer(url, referer = 'https://embed.filmu.in/', useLocalProxy =
         hlsInstance = h;
         let networkRecoveryAttempted = false;
         let mediaRecoveryAttempted = false;
+        let primaryFallbackStarted = false;
+        let primaryPlaybackWatchdog = null;
 
-        h.on(Hls.Events.MEDIA_ATTACHED, () => h.loadSource(playbackUrl));
+        const switchFromPrimary = (reason, message) => {
+            if (primaryFallbackStarted) return true;
+            primaryFallbackStarted = true;
+            clearTimeout(primaryPlaybackWatchdog);
+            h.destroy();
+            if (window._switchToNextEmbedServer?.(reason)) {
+                hideLoader();
+                return true;
+            }
+            displayError(message);
+            hideLoader();
+            return false;
+        };
+
+        h.on(Hls.Events.MEDIA_ATTACHED, () => {
+            primaryPlaybackWatchdog = setTimeout(() => {
+                console.error('Primary HLS stream did not start playback in time.');
+                switchFromPrimary(
+                    'Primary HLS stream timed out before playback',
+                    'The primary stream timed out before playback could start.'
+                );
+            }, 12000);
+            h.loadSource(playbackUrl);
+        });
         h.on(Hls.Events.MANIFEST_PARSED, async () => {
             // Do the location lookup and language selection before autoplay.
             // This prevents the normal "first audio track" choice from being
@@ -277,6 +302,22 @@ function initHlsPlayer(url, referer = 'https://embed.filmu.in/', useLocalProxy =
         h.on(Hls.Events.ERROR, (event, data) => {
             console.log(data);
 
+            const responseText = data.response?.text ||
+                (typeof data.response?.data === 'string' ? data.response.data : '');
+            const responseCode = Number(data.response?.code || 0);
+            const isUpstreamHtml = /upstream returned html(?: instead of media)?/i.test(responseText);
+            if (isUpstreamHtml || responseCode >= 500) {
+                const reason = isUpstreamHtml
+                    ? 'Stream proxy returned HTML instead of media'
+                    : `Stream proxy returned HTTP ${responseCode}`;
+                console.warn(`${reason}; switching servers.`);
+                switchFromPrimary(reason, isUpstreamHtml
+                    ? 'The stream server returned an HTML page instead of media.'
+                    : `The stream proxy failed with HTTP ${responseCode}.`);
+                return;
+            }
+
+            if (primaryFallbackStarted) return;
             if (!data.fatal) return;
 
             switch (data.type) {
@@ -290,23 +331,11 @@ function initHlsPlayer(url, referer = 'https://embed.filmu.in/', useLocalProxy =
                         data.details === Hls.ErrorDetails.LEVEL_LOAD_TIMEOUT
                     ) {
                         console.error("Stream not found / unreachable:", data);
-                        h.destroy();
-                        if (window._switchToNextEmbedServer?.('Primary HLS stream was not found')) {
-                            hideLoader();
-                            break;
-                        }
-                        displayError("Stream not found (404)");
-                        hideLoader();
+                        switchFromPrimary('Primary HLS stream was not found', 'Stream not found (404).');
                         break;
                     }
                     if (networkRecoveryAttempted) {
-                        h.destroy();
-                        if (window._switchToNextEmbedServer?.('Primary HLS network retries failed')) {
-                            hideLoader();
-                            break;
-                        }
-                        displayError('Fatal HLS network error');
-                        hideLoader();
+                        switchFromPrimary('Primary HLS network retries failed', 'Fatal HLS network error.');
                     } else {
                         networkRecoveryAttempted = true;
                         console.warn("Network error, retrying...");
@@ -316,13 +345,7 @@ function initHlsPlayer(url, referer = 'https://embed.filmu.in/', useLocalProxy =
 
                 case Hls.ErrorTypes.MEDIA_ERROR:
                     if (mediaRecoveryAttempted) {
-                        h.destroy();
-                        if (window._switchToNextEmbedServer?.('Primary HLS media recovery failed')) {
-                            hideLoader();
-                            break;
-                        }
-                        displayError('Fatal HLS media error');
-                        hideLoader();
+                        switchFromPrimary('Primary HLS media recovery failed', 'Fatal HLS media error.');
                     } else {
                         mediaRecoveryAttempted = true;
                         console.warn("Media error, recovering...");
@@ -332,20 +355,16 @@ function initHlsPlayer(url, referer = 'https://embed.filmu.in/', useLocalProxy =
 
                 default:
                     console.error("Unrecoverable error:", data);
-                    h.destroy();
-                    if (window._switchToNextEmbedServer?.('Primary HLS playback failed')) {
-                        hideLoader();
-                        break;
-                    }
-                    displayError("Fatal HLS error");
-                    hideLoader();
+                    switchFromPrimary('Primary HLS playback failed', 'Fatal HLS error.');
                     break;
             }
         });
+
         h.attachMedia(video);
 
         video.addEventListener('loadedmetadata', () => restoreVideoProgress(), {once:true});
         video.addEventListener('canplay', async () => {
+            clearTimeout(primaryPlaybackWatchdog);
             // canplay may arrive before/alongside MANIFEST_PARSED on some
             // versions of HLS.js, so enforce the selection once more here.
             await applyLocationBasedAudio(h);
