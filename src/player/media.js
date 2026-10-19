@@ -74,7 +74,7 @@ function getStreamPlaybackUrl(streamUrl, referer = 'https://embed.filmu.in/', us
     }
 }
 
-function createCloudflareProxyFailoverLoader() {
+function createCloudflareProxyFailoverLoader(onSuccessfulWorkerResponse) {
     const BaseLoader = Hls.DefaultConfig.loader;
     return class CloudflareProxyFailoverLoader extends BaseLoader {
         load(context, config, callbacks) {
@@ -103,6 +103,13 @@ function createCloudflareProxyFailoverLoader() {
 
                 super.load(requestContext, config, {
                     ...callbacks,
+                    onSuccess: (response, stats, loadedContext, networkDetails) => {
+                        const status = Number(response?.code ?? response?.status ?? 0);
+                        if (isCloudflareRequest && status >= 200 && status < 300) {
+                            onSuccessfulWorkerResponse?.();
+                        }
+                        callbacks.onSuccess(response, stats, loadedContext, networkDetails);
+                    },
                     onError: (response, failedContext, networkDetails, stats) => {
                         const status = Number(response?.code || 0);
                         const canFailOver = isCloudflareRequest &&
@@ -252,10 +259,13 @@ function initHlsPlayer(url, referer = 'https://embed.filmu.in/', useLocalProxy =
     if (Hls.isSupported()) {
         isHlsJsMode = true;
         showLoader();
+        let primaryWorkerResponseReceived = false;
         const h = new Hls({
             renderTextTracksNatively: true,
             subtitleDisplay: true,
-            loader: createCloudflareProxyFailoverLoader(),
+            loader: createCloudflareProxyFailoverLoader(() => {
+                primaryWorkerResponseReceived = true;
+            }),
         });
         hlsInstance = h;
         let networkRecoveryAttempted = false;
@@ -279,12 +289,16 @@ function initHlsPlayer(url, referer = 'https://embed.filmu.in/', useLocalProxy =
 
         h.on(Hls.Events.MEDIA_ATTACHED, () => {
             primaryPlaybackWatchdog = setTimeout(() => {
+                if (primaryWorkerResponseReceived) {
+                    console.warn('Primary worker returned media successfully; keeping the current server selected.');
+                    return;
+                }
                 console.error('Primary HLS stream did not start playback in time.');
                 switchFromPrimary(
                     'Primary HLS stream timed out before playback',
                     'The primary stream timed out before playback could start.'
                 );
-            }, 12000);
+            }, 15000);
             h.loadSource(playbackUrl);
         });
         h.on(Hls.Events.MANIFEST_PARSED, async () => {
