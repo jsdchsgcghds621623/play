@@ -77,6 +77,11 @@ function getStreamPlaybackUrl(streamUrl, referer = 'https://embed.filmu.in/', us
 function createCloudflareProxyFailoverLoader(onSuccessfulWorkerResponse) {
     const BaseLoader = Hls.DefaultConfig.loader;
     return class CloudflareProxyFailoverLoader extends BaseLoader {
+        constructor(config) {
+            super(config);
+            this.activeLoader = null;
+        }
+
         load(context, config, callbacks) {
             const isCloudflareRequest = (() => {
                 try {
@@ -90,7 +95,6 @@ function createCloudflareProxyFailoverLoader(onSuccessfulWorkerResponse) {
             let requestIndex = activeCloudflareProxyIndex;
 
             const attempt = () => {
-                requestIndex = activeCloudflareProxyIndex;
                 const requestContext = { ...context };
                 if (requestIndex > 0 && isCloudflareRequest) {
                     const endpoint = new URL(CLOUDFLARE_PROXY_FALLBACKS[requestIndex - 1]);
@@ -101,35 +105,56 @@ function createCloudflareProxyFailoverLoader(onSuccessfulWorkerResponse) {
                     requestContext.url = requestUrl.href;
                 }
 
-                super.load(requestContext, config, {
+                const retryOnNextWorker = () => {
+                    if (!isCloudflareRequest) return false;
+
+                    const nextIndex = Math.max(requestIndex + 1, activeCloudflareProxyIndex);
+                    if (nextIndex > CLOUDFLARE_PROXY_FALLBACKS.length) return false;
+
+                    requestIndex = nextIndex;
+                    activeCloudflareProxyIndex = Math.max(activeCloudflareProxyIndex, nextIndex);
+                    attempt();
+                    return true;
+                };
+
+                const getResponseStatus = (response, networkDetails) =>
+                    Number(response?.code ?? response?.status ?? networkDetails?.status ?? 0);
+
+                const loader = new BaseLoader(config);
+                this.activeLoader = loader;
+                loader.load(requestContext, config, {
                     ...callbacks,
                     onSuccess: (response, stats, loadedContext, networkDetails) => {
-                        const status = Number(response?.code ?? response?.status ?? 0);
+                        this.stats = stats;
+                        const status = getResponseStatus(response, networkDetails);
+                        if ((status === 429 || status === 1015) && retryOnNextWorker()) {
+                            console.warn(`Proxy worker returned HTTP ${status}; trying the next worker.`);
+                            return;
+                        }
+                        if (status === 429 || status === 1015) {
+                            callbacks.onError(response, loadedContext, networkDetails, stats);
+                            return;
+                        }
                         if (isCloudflareRequest && status >= 200 && status < 300) {
                             onSuccessfulWorkerResponse?.();
                         }
                         callbacks.onSuccess(response, stats, loadedContext, networkDetails);
                     },
                     onError: (response, failedContext, networkDetails, stats) => {
-                        const status = Number(response?.code || 0);
-                        const canFailOver = isCloudflareRequest &&
-                            (status === 0 || status === 429 || status === 1015 || status >= 500);
-                        if (canFailOver && requestIndex < CLOUDFLARE_PROXY_FALLBACKS.length) {
-                            if (requestIndex === activeCloudflareProxyIndex) activeCloudflareProxyIndex++;
-                            if (requestIndex < activeCloudflareProxyIndex) {
-                                attempt();
-                                return;
-                            }
+                        this.stats = stats;
+                        const status = getResponseStatus(response, networkDetails);
+                        const canFailOver = status === 0 || status === 429 || status === 1015 || status >= 500;
+                        if (canFailOver && retryOnNextWorker()) {
+                            console.warn(`Proxy worker returned HTTP ${status || 'network error'}; trying the next worker.`);
+                            return;
                         }
                         callbacks.onError(response, failedContext, networkDetails, stats);
                     },
                     onTimeout: (stats, failedContext, networkDetails) => {
-                        if (isCloudflareRequest && requestIndex < CLOUDFLARE_PROXY_FALLBACKS.length) {
-                            if (requestIndex === activeCloudflareProxyIndex) activeCloudflareProxyIndex++;
-                            if (requestIndex < activeCloudflareProxyIndex) {
-                                attempt();
-                                return;
-                            }
+                        this.stats = stats;
+                        if (retryOnNextWorker()) {
+                            console.warn('Proxy worker timed out; trying the next worker.');
+                            return;
                         }
                         callbacks.onTimeout(stats, failedContext, networkDetails);
                     },
@@ -137,6 +162,15 @@ function createCloudflareProxyFailoverLoader(onSuccessfulWorkerResponse) {
             };
 
             attempt();
+        }
+
+        abort() {
+            this.activeLoader?.abort();
+        }
+
+        destroy() {
+            this.activeLoader?.destroy();
+            this.activeLoader = null;
         }
     };
 }
@@ -259,12 +293,12 @@ function initHlsPlayer(url, referer = 'https://embed.filmu.in/', useLocalProxy =
     if (Hls.isSupported()) {
         isHlsJsMode = true;
         showLoader();
-        let primaryWorkerResponseReceived = false;
+        let proxyWorkerResponseReceived = false;
         const h = new Hls({
             renderTextTracksNatively: true,
             subtitleDisplay: true,
             loader: createCloudflareProxyFailoverLoader(() => {
-                primaryWorkerResponseReceived = true;
+                proxyWorkerResponseReceived = true;
             }),
         });
         hlsInstance = h;
@@ -289,8 +323,8 @@ function initHlsPlayer(url, referer = 'https://embed.filmu.in/', useLocalProxy =
 
         h.on(Hls.Events.MEDIA_ATTACHED, () => {
             primaryPlaybackWatchdog = setTimeout(() => {
-                if (primaryWorkerResponseReceived) {
-                    console.warn('Primary worker returned media successfully; keeping the current server selected.');
+                if (proxyWorkerResponseReceived) {
+                    console.warn('A proxy worker returned media successfully; keeping the current server selected.');
                     return;
                 }
                 console.error('Primary HLS stream did not start playback in time.');
