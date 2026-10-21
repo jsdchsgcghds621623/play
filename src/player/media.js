@@ -485,8 +485,8 @@ function initHlsPlayer(url, referer = 'https://embed.filmu.in/', useLocalProxy =
     }
 }
 
-const STREAM_API_URL = 'https://filmu.onrender.com/api/stream';
-const BACKUP_STREAM_API_URL = 'https://vidzy-wtgr.onrender.com/api/stream';
+const STREAM_API_URL = 'https://filmu-mpbu.onrender.com/api/stream';
+const BACKUP_STREAM_API_URL = 'https://vidzy-wlqs.onrender.com/api/stream';
 const MAIN_STREAM_REFERER = 'https://embed.filmu.in/';
 const BACKUP_STREAM_REFERER = 'https://player.vidzee.wtf/';
 
