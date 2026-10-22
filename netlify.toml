@@ -1,0 +1,37 @@
+[build]
+  publish = "src"
+
+[[redirects]]
+  from = "/embed"
+  to = "/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/embed/*"
+  to = "/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/movie"
+  to = "/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/movie/*"
+  to = "/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/tv"
+  to = "/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/tv/*"
+  to = "/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/testurl*"
+  to = "/index.html"
+  status = 200
