@@ -513,12 +513,28 @@ async function getUnavailableStreamMessage(type, id, season, episode) {
 }
 
 async function fetchStreamApi(type, id, season, episode) {
-    const mainParams = new URLSearchParams({ tmdb: String(id) });
+    const params = new URLSearchParams({ tmdb: String(id) });
     if (type === 'tv') {
-        mainParams.set('s', String(season));
-        mainParams.set('e', String(episode));
+        params.set('s', String(season));
+        params.set('e', String(episode));
     } else {
-        mainParams.set('type', type);
+        params.set('type', type);
+    }
+
+    let mainError;
+    try {
+        const response = await fetch(`${STREAM_API_URL}?${params}`, { cache: 'no-store' });
+        if (!response.ok) throw new Error(`Main stream API HTTP ${response.status}`);
+
+        const data = await response.json();
+        const sourceUrl = data?.sources?.find(source => source?.url)?.url
+            || (data?.m3u8_path && data?._base ? new URL(data.m3u8_path, `${data._base}/`).href : null);
+        if (data?.available !== false && sourceUrl) {
+            return { data, sourceUrl, referer: MAIN_STREAM_REFERER, useLocalProxy: false };
+        }
+        mainError = new Error(data?.error || 'Main stream API returned no playable source');
+    } catch (error) {
+        mainError = error;
     }
 
     const backupParams = new URLSearchParams({ type, tmdb: String(id) });
@@ -527,46 +543,18 @@ async function fetchStreamApi(type, id, season, episode) {
         backupParams.set('e', String(episode));
     }
 
-    const candidates = [
-        {
-            url: `${STREAM_API_URL}?${mainParams}`,
-            referer: MAIN_STREAM_REFERER,
-            getSource: data => data?.sources?.find(source => source?.url)?.url
-                || (data?.m3u8_path && data?._base ? new URL(data.m3u8_path, `${data._base}/`).href : null),
-        },
-        {
-            url: `${BACKUP_STREAM_API_URL}?${backupParams}`,
-            referer: BACKUP_STREAM_REFERER,
-            getSource: data => data?.m3u8 || data?.sources?.find(source => source?.url)?.url,
-        },
-    ];
-    const controllers = candidates.map(() => new AbortController());
-
     try {
-        const winner = await Promise.any(candidates.map(async (candidate, index) => {
-            const response = await fetch(candidate.url, {
-                cache: 'no-store',
-                signal: controllers[index].signal,
-            });
-            if (!response.ok) throw new Error(`Stream API HTTP ${response.status}`);
+        const response = await fetch(`${BACKUP_STREAM_API_URL}?${backupParams}`, { cache: 'no-store' });
+        if (!response.ok) throw new Error(`Backup stream API HTTP ${response.status}`);
 
-            const data = await response.json();
-            const sourceUrl = candidate.getSource(data);
-            if (data?.available === false || !sourceUrl) {
-                throw new Error(data?.error || 'Stream API returned no playable source');
-            }
-            return { data, sourceUrl, referer: candidate.referer, useLocalProxy: false, index };
-        }));
-
-        controllers.forEach((controller, index) => {
-            if (index !== winner.index) controller.abort();
-        });
-        const { index, ...stream } = winner;
-        return stream;
-    } catch (error) {
-        const details = error.errors?.map(reason => reason.message).join('; ')
-            || error.message;
-        throw new Error(`Both stream APIs failed (${details})`);
+        const data = await response.json();
+        const sourceUrl = data?.m3u8 || data?.sources?.find(source => source?.url)?.url;
+        if (data?.available === false || !sourceUrl) {
+            throw new Error(data?.error || 'Backup stream API returned no playable source');
+        }
+        return { data, sourceUrl, referer: BACKUP_STREAM_REFERER, useLocalProxy: false };
+    } catch (backupError) {
+        throw new Error(`Main stream unavailable (${mainError.message}); backup failed (${backupError.message})`);
     }
 }
 
