@@ -304,7 +304,6 @@ function showSeekTooltip(clientX, time) {
     const clampedLeft = Math.max(tipHalfW, Math.min(pos, rect.width - tipHalfW));
     seekTooltip.style.left = `${clampedLeft}px`;
     seekTooltipTime.textContent = formatTime(time);
-    updateThumbnailFrame(time);
     seekTooltip.classList.add('visible');
 }
 function hideSeekTooltip() {
@@ -541,6 +540,7 @@ async function applyLocationBasedAudio(hls) {
     }
 
     const country = await getUserCountry();
+    if (_audioAutoApplied) return hls.audioTrack;
     const preferences = getPreferredAudioLanguages(country);
 
     let selectedIndex = -1;
@@ -600,6 +600,37 @@ async function applyLocationBasedAudio(hls) {
     );
 
     return selectedIndex;
+}
+
+function applyNativeAudioSelection() {
+    const tracks = video.audioTracks ? Array.from(video.audioTracks) : [];
+    if (!tracks.length || _audioAutoApplied) return;
+
+    const country = _userCountry;
+    const preferences = getPreferredAudioLanguages(country);
+    let selectedIndex = -1;
+
+    for (const preferred of preferences) {
+        selectedIndex = tracks.findIndex(track => {
+            const lang = getAudioTrackLanguage(track);
+            const name = String(track?.label || track?.language || '').toLowerCase();
+            return lang === normalizeAudioLanguage(preferred) ||
+                   name.includes(String(preferred).toLowerCase());
+        });
+        if (selectedIndex !== -1) break;
+    }
+
+    if (selectedIndex === -1) {
+        selectedIndex = tracks.findIndex(track => getAudioTrackLanguage(track) === 'en');
+    }
+    if (selectedIndex === -1) selectedIndex = 0;
+
+    tracks.forEach((track, index) => { track.enabled = index === selectedIndex; });
+    _audioAutoApplied = country !== null;
+
+    console.log(
+        `[Location Audio] ${country || 'unknown'} -> ${getAudioTrackLanguage(tracks[selectedIndex]) || 'unknown'}`
+    );
 }
 
 /* -------------------------------------------------------------------------

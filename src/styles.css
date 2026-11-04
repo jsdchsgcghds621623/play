@@ -846,6 +846,7 @@
         }
         #seek-tooltip.visible { opacity: 1; }
         #seek-thumb-image {
+            display: none;
             width: 160px;
             height: 90px;
             background-color: #111;
@@ -855,7 +856,7 @@
             box-shadow: 0 6px 18px rgba(0,0,0,0.5);
         }
         #seek-tooltip-time {
-            margin-top: 6px;
+            margin-top: 0;
             background: rgba(15, 15, 15, 0.92);
             color: #fff;
             font-family: 'Netflix Sans', sans-serif;

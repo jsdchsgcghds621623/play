@@ -274,6 +274,8 @@ function startPlayer() {
     setupUIControls(); resolveAndPlay();
 }
 
-if (document.readyState === 'complete') startPlayer();
-else window.addEventListener('load', startPlayer, { once: true });
-
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', startPlayer, { once: true });
+} else {
+    startPlayer();
+}

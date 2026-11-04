@@ -218,10 +218,11 @@ function initHlsPlayer(url, referer = 'https://embed.filmu.in/', useLocalProxy =
 
         let _mirrorTried = false;
 
-        const onLoadedMetadata = async () => {
-            // Safari/iOS native HLS path: select the country-preferred track
-            // through the browser's native audioTracks API before autoplay.
-            await getUserCountry();
+        const onLoadedMetadata = () => {
+            // Start with the available preference, then refine it when country
+            // detection completes without holding up playback.
+            applyNativeAudioSelection();
+            getUserCountry().then(applyNativeAudioSelection);
 
             if (video.audioTracks && video.audioTracks.length && !_audioAutoApplied) {
                 const tracks = Array.from(video.audioTracks);
@@ -245,7 +246,7 @@ function initHlsPlayer(url, referer = 'https://embed.filmu.in/', useLocalProxy =
                 if (selectedIndex === -1) selectedIndex = 0;
 
                 tracks.forEach((track, i) => { track.enabled = i === selectedIndex; });
-                _audioAutoApplied = true;
+                _audioAutoApplied = country !== null;
 
                 console.log(
                     `[Location Audio] ${country || 'unknown'} â†’ ${getAudioTrackLanguage(tracks[selectedIndex]) || 'unknown'}`
@@ -335,11 +336,9 @@ function initHlsPlayer(url, referer = 'https://embed.filmu.in/', useLocalProxy =
             }, 15000);
             h.loadSource(playbackUrl);
         });
-        h.on(Hls.Events.MANIFEST_PARSED, async () => {
-            // Do the location lookup and language selection before autoplay.
-            // This prevents the normal "first audio track" choice from being
-            // the final selection.
-            await applyLocationBasedAudio(h);
+        h.on(Hls.Events.MANIFEST_PARSED, () => {
+            // Apply the preferred track when location detection completes.
+            applyLocationBasedAudio(h);
             applyDefaultEnglishSubtitle();
             renderTracksMenu();
             renderQualityList();
@@ -411,11 +410,11 @@ function initHlsPlayer(url, referer = 'https://embed.filmu.in/', useLocalProxy =
         h.attachMedia(video);
 
         video.addEventListener('loadedmetadata', () => restoreVideoProgress(), {once:true});
-        video.addEventListener('canplay', async () => {
+        video.addEventListener('canplay', () => {
             clearTimeout(primaryPlaybackWatchdog);
             // canplay may arrive before/alongside MANIFEST_PARSED on some
             // versions of HLS.js, so enforce the selection once more here.
-            await applyLocationBasedAudio(h);
+            applyLocationBasedAudio(h);
             hideLoader();
             setupInactivityDetection();
             startProgressSaving();
@@ -426,10 +425,11 @@ function initHlsPlayer(url, referer = 'https://embed.filmu.in/', useLocalProxy =
         isHlsJsMode = false;
         showLoader();
         video.src = playbackUrl;
-        video.addEventListener('loadedmetadata', async () => {
-            // Safari/iOS native HLS path: select the country-preferred track
-            // through the browser's native audioTracks API before autoplay.
-            await getUserCountry();
+        video.addEventListener('loadedmetadata', () => {
+            // Start with the available preference, then refine it when country
+            // detection completes without holding up playback.
+            applyNativeAudioSelection();
+            getUserCountry().then(applyNativeAudioSelection);
 
             if (video.audioTracks && video.audioTracks.length && !_audioAutoApplied) {
                 const tracks = Array.from(video.audioTracks);
@@ -453,7 +453,7 @@ function initHlsPlayer(url, referer = 'https://embed.filmu.in/', useLocalProxy =
                 if (selectedIndex === -1) selectedIndex = 0;
 
                 tracks.forEach((track, i) => { track.enabled = i === selectedIndex; });
-                _audioAutoApplied = true;
+                _audioAutoApplied = country !== null;
 
                 console.log(
                     `[Location Audio] ${country || 'unknown'} â†’ ${getAudioTrackLanguage(tracks[selectedIndex]) || 'unknown'}`
@@ -513,28 +513,12 @@ async function getUnavailableStreamMessage(type, id, season, episode) {
 }
 
 async function fetchStreamApi(type, id, season, episode) {
-    const params = new URLSearchParams({ tmdb: String(id) });
+    const mainParams = new URLSearchParams({ tmdb: String(id) });
     if (type === 'tv') {
-        params.set('s', String(season));
-        params.set('e', String(episode));
+        mainParams.set('s', String(season));
+        mainParams.set('e', String(episode));
     } else {
-        params.set('type', type);
-    }
-
-    let mainError;
-    try {
-        const response = await fetch(`${STREAM_API_URL}?${params}`, { cache: 'no-store' });
-        if (!response.ok) throw new Error(`Main stream API HTTP ${response.status}`);
-
-        const data = await response.json();
-        const sourceUrl = data?.sources?.find(source => source?.url)?.url
-            || (data?.m3u8_path && data?._base ? new URL(data.m3u8_path, `${data._base}/`).href : null);
-        if (data?.available !== false && sourceUrl) {
-            return { data, sourceUrl, referer: MAIN_STREAM_REFERER, useLocalProxy: false };
-        }
-        mainError = new Error(data?.error || 'Main stream API returned no playable source');
-    } catch (error) {
-        mainError = error;
+        mainParams.set('type', type);
     }
 
     const backupParams = new URLSearchParams({ type, tmdb: String(id) });
@@ -543,18 +527,46 @@ async function fetchStreamApi(type, id, season, episode) {
         backupParams.set('e', String(episode));
     }
 
-    try {
-        const response = await fetch(`${BACKUP_STREAM_API_URL}?${backupParams}`, { cache: 'no-store' });
-        if (!response.ok) throw new Error(`Backup stream API HTTP ${response.status}`);
+    const candidates = [
+        {
+            url: `${STREAM_API_URL}?${mainParams}`,
+            referer: MAIN_STREAM_REFERER,
+            getSource: data => data?.sources?.find(source => source?.url)?.url
+                || (data?.m3u8_path && data?._base ? new URL(data.m3u8_path, `${data._base}/`).href : null),
+        },
+        {
+            url: `${BACKUP_STREAM_API_URL}?${backupParams}`,
+            referer: BACKUP_STREAM_REFERER,
+            getSource: data => data?.m3u8 || data?.sources?.find(source => source?.url)?.url,
+        },
+    ];
+    const controllers = candidates.map(() => new AbortController());
 
-        const data = await response.json();
-        const sourceUrl = data?.m3u8 || data?.sources?.find(source => source?.url)?.url;
-        if (data?.available === false || !sourceUrl) {
-            throw new Error(data?.error || 'Backup stream API returned no playable source');
-        }
-        return { data, sourceUrl, referer: BACKUP_STREAM_REFERER, useLocalProxy: false };
-    } catch (backupError) {
-        throw new Error(`Main stream unavailable (${mainError.message}); backup failed (${backupError.message})`);
+    try {
+        const winner = await Promise.any(candidates.map(async (candidate, index) => {
+            const response = await fetch(candidate.url, {
+                cache: 'no-store',
+                signal: controllers[index].signal,
+            });
+            if (!response.ok) throw new Error(`Stream API HTTP ${response.status}`);
+
+            const data = await response.json();
+            const sourceUrl = candidate.getSource(data);
+            if (data?.available === false || !sourceUrl) {
+                throw new Error(data?.error || 'Stream API returned no playable source');
+            }
+            return { data, sourceUrl, referer: candidate.referer, useLocalProxy: false, index };
+        }));
+
+        controllers.forEach((controller, index) => {
+            if (index !== winner.index) controller.abort();
+        });
+        const { index, ...stream } = winner;
+        return stream;
+    } catch (error) {
+        const details = error.errors?.map(reason => reason.message).join('; ')
+            || error.message;
+        throw new Error(`Both stream APIs failed (${details})`);
     }
 }
 
